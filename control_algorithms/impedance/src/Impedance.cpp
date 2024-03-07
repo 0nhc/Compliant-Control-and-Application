@@ -133,12 +133,12 @@ void Impedance::compute_impedance(bool flag)
         if (wrench_z != 0)
         {
             KDL::Frame End_Pose;
-            fk_pos_solver_->JntToCart(Jnt_Pos_State,End_Pose);
+            fk_pos_solver_->JntToCart(Jnt_Pos_State,End_Pose); // 运动学正解得到当前末端位姿
 
-            KDL::JntArrayVel Jnt_Vel;
+            KDL::JntArrayVel Jnt_Vel; 
             KDL::FrameVel End_Pose_Vel;
             Jnt_Vel = KDL::JntArrayVel(Jnt_Pos_State, Jnt_Vel_State);
-            fk_vel_solver_->JntToCart(Jnt_Vel, End_Pose_Vel);
+            fk_vel_solver_->JntToCart(Jnt_Vel, End_Pose_Vel); // 运动学正解得到当前末端速度
 
             KDL::Vector pose_p, pose_vel_p;
             pose_p = End_Pose.p;
@@ -146,19 +146,19 @@ void Impedance::compute_impedance(bool flag)
 
             // double acc_x = (wrench_x - (Impedance_D[0]*pose_vel_p(0) + Impedance_K[0]*(pose_p(0)-desired_pose_[0])))/Impedance_M[0];
             // double acc_y = (wrench_y - (Impedance_D[1]*pose_vel_p(1) + Impedance_K[1]*(pose_p(1)-desired_pose_[1])))/Impedance_M[1];
-            double acc_z = (wrench_z - (Impedance_D[2]*pose_vel_p(2) + Impedance_K[2]*(desired_pose_[2]-pose_p(2))))/Impedance_M[2];
+            double acc_z = (wrench_z - (Impedance_D[2]*pose_vel_p(2) + Impedance_K[2]*(desired_pose_[2]-pose_p(2))))/Impedance_M[2]; //根据六轴传感器测量到的力，期望位置与位置状态的误差，以及速度状态，计算得到加速度
 
             ros::Rate loop_rate_(200);
             ros::Duration duration = loop_rate_.expectedCycleTime();
             // pos_x = pos_x + 0.01*(pose_vel_p(0) * duration.toSec() + 0.5 * acc_x * duration.toSec() * duration.toSec());
             // pos_y = pos_y + 0.01*(pose_vel_p(1) * duration.toSec() + 0.5 * acc_y * duration.toSec() * duration.toSec());
-            pos_z = 10*(pose_vel_p(2) * duration.toSec() + 0.5 * acc_z * duration.toSec() * duration.toSec());
-            Desired_Pos_ = KDL::Vector(desired_pose_[0]+pos_x, desired_pose_[1]+pos_y, desired_pose_[2]+pos_z);
+            pos_z = 10*(pose_vel_p(2) * duration.toSec() + 0.5 * acc_z * duration.toSec() * duration.toSec()); // 根据加速度和当前速度状态，计算得到期望末端位置增量
+            Desired_Pos_ = KDL::Vector(desired_pose_[0]+pos_x, desired_pose_[1]+pos_y, desired_pose_[2]+pos_z); 
             Desired_Ori_ = KDL::Rotation::Quaternion(desired_pose_[3], desired_pose_[4], desired_pose_[5],desired_pose_[6]);
-            Desired_Pose_ = KDL::Frame(Desired_Ori_, Desired_Pos_);
+            Desired_Pose_ = KDL::Frame(Desired_Ori_, Desired_Pos_); // 根据末端位置增量得到末端位姿
         }
 
-        ik_pos_solver_->CartToJnt(Jnt_Pos_State, Desired_Pose_, CMD_State);
+        ik_pos_solver_->CartToJnt(Jnt_Pos_State, Desired_Pose_, CMD_State); // 根据当前关节状态，末端期望位姿，运动学逆解得到关节位置指令
 
         // reaching desired joint position using a hyperbolic tangent function
         double lambda = 0.1;
@@ -166,7 +166,7 @@ void Impedance::compute_impedance(bool flag)
         double ch = cosh(M_PI - lambda*Step_);
         double sh2 = 1.0/(ch*ch);
 
-        for(size_t i = 0; i < this->kdl_chain_.getNrOfJoints(); i++)
+        for(size_t i = 0; i < this->kdl_chain_.getNrOfJoints(); i++) // 使用双曲正切函数对每个关节的运动轨迹进行平滑处理
         {
             //take into account also initial/final velocity and acceleration
             Current_State(i) = CMD_State(i) - Jnt_Pos_Init_State(i);
@@ -198,14 +198,14 @@ void Impedance::compute_impedance(bool flag)
         for(size_t i=0; i<this->kdl_chain_.getNrOfJoints(); i++)
         {
             // control law
-            pid_cmd_(i) = Ka_(i)*Jnt_Desired_State.qdotdot(i) + Kv_(i)*(Jnt_Desired_State.qdot(i) - Jnt_Vel_State(i)) + Kp_(i)*(Jnt_Desired_State.q(i) - Jnt_Pos_State(i));
-            cg_cmd_(i) = C_(i) + G_(i);
+            pid_cmd_(i) = Ka_(i)*Jnt_Desired_State.qdotdot(i) + Kv_(i)*(Jnt_Desired_State.qdot(i) - Jnt_Vel_State(i)) + Kp_(i)*(Jnt_Desired_State.q(i) - Jnt_Pos_State(i)); // 根据位置、速度误差以及期望加速度计算得到关节力矩
+            cg_cmd_(i) = C_(i) + G_(i); // 重力补偿力矩？
             // cg_cmd_(i) = C_(i)*Jnt_Desired_State.qdot(i) + G_(i);
 
             // Jnt_Toq_Cmd_(i) = M_(i)*Jnt_Desired_State.qdotdot(i)+C_(i)*Jnt_Desired_State.qdot(i)+G_(i);
         }
         Jnt_Toq_Cmd_.data = M_.data * pid_cmd_.data;
-        KDL::Add(Jnt_Toq_Cmd_,cg_cmd_,Jnt_Toq_Cmd_);
+        KDL::Add(Jnt_Toq_Cmd_,cg_cmd_,Jnt_Toq_Cmd_); // 把期望的力矩和疑似重力补偿力矩加在一起，作为最终的关节力矩输出
 
 
         //! Method: 2 for Test
